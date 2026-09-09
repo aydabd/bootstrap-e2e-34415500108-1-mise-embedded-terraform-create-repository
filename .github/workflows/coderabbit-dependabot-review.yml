@@ -1,0 +1,51 @@
+name: Request CodeRabbit Review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to request a CodeRabbit review for.
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write # Required to inspect the target pull request.
+  issues: write # Required to read and create the pull request's issue comments.
+
+jobs:
+  request-coderabbit-review:
+    name: Request CodeRabbit review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Request CodeRabbit review comment (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "pr_number must be a positive integer" >&2
+            exit 1
+          }
+          pr_state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          if [ "$pr_state" != OPEN ]; then
+            echo "Open pull request #$PR_NUMBER was not found" >&2
+            exit 1
+          fi
+
+          existing_comment_id="$({
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("@coderabbitai review"))) | .id'
+          } | head -n 1 || true)"
+
+          if [ -n "${existing_comment_id}" ]; then
+            echo "CodeRabbit review request comment already exists: ${existing_comment_id}"
+            exit 0
+          fi
+
+          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "@coderabbitai review"
+          echo "Posted CodeRabbit review request comment on PR #${PR_NUMBER}."
